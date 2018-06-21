@@ -27,6 +27,7 @@ import (
 type Command struct {
 	Command     string
 	Environment environments.Environment
+	Env         map[string]string
 }
 
 func (c *Command) Run() error {
@@ -35,7 +36,6 @@ func (c *Command) Run() error {
 	parts := strings.Split(c.Command, " ")
 	cmd := parts[0]
 	args := parts[1:]
-	env := make(map[string]string)
-	_, err := c.Environment.Execute(cmd, args, env, nil)
+	_, err := c.Environment.Execute(cmd, args, c.Env, nil)
 	return err
 }

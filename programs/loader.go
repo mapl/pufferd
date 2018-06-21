@@ -32,14 +32,14 @@ import (
 )
 
 var (
-	allPrograms    []Program = make([]Program, 0)
+	allPrograms    = make([]Program, 0)
 	ServerFolder   string
 	TemplateFolder string
 )
 
 func Initialize() {
-	ServerFolder = config.GetOrDefault("serverfolder", common.JoinPath("data", "servers"))
-	TemplateFolder = config.GetOrDefault("templatefolder", common.JoinPath("data", "templates"))
+	ServerFolder = config.GetStringOrDefault("serverfolder", common.JoinPath("data", "servers"))
+	TemplateFolder = config.GetStringOrDefault("templatefolder", common.JoinPath("data", "templates"))
 }
 
 func LoadFromFolder() {
@@ -87,9 +87,7 @@ func Load(id string) (program Program, err error) {
 }
 
 func LoadFromData(id string, source []byte) (program Program, err error) {
-	var data struct {
-		ProgramData ProgramData `json:"pufferd"`
-	}
+	data := ServerJson{}
 	data.ProgramData = CreateProgram()
 	err = json.Unmarshal(source, &data)
 	if err != nil {
@@ -116,10 +114,11 @@ func Create(id string, serverType string, data map[string]interface{}) bool {
 		return false
 	}
 
-	var templateJson struct {
-		ProgramData ProgramData `json:"pufferd"`
-	}
+	templateJson := ServerJson{}
+
 	templateJson.ProgramData = CreateProgram()
+	templateJson.ProgramData.Identifier = id
+	templateJson.ProgramData.Template = serverType
 	err = json.Unmarshal(templateData, &templateJson)
 
 	if err != nil {
@@ -134,15 +133,15 @@ func Create(id string, serverType string, data map[string]interface{}) bool {
 		}
 		for k, v := range data {
 			if d, ok := mapper[k]; ok {
-				d.Value= v
+				d.Value = v
 				mapper[k] = d
 			} else {
 				newMap := DataObject{
-					Value: v,
+					Value:       v,
 					Description: "No Description",
-					Display: k,
-					Required: false,
-					Internal: true,
+					Display:     k,
+					Required:    false,
+					Internal:    true,
 				}
 				mapper[k] = newMap
 			}
@@ -229,7 +228,7 @@ func GetFromCache(id string) Program {
 func Save(id string) (err error) {
 	program := GetFromCache(id)
 	if program == nil {
-		err = errors.New("No server with given id")
+		err = errors.New("no server with given id")
 		return
 	}
 	err = program.Save(common.JoinPath(ServerFolder, id+".json"))

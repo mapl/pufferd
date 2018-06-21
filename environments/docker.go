@@ -19,44 +19,45 @@ package environments
 import (
 	"errors"
 
-	ppError "github.com/pufferpanel/pufferd/errors"
-	"github.com/docker/docker/client"
 	"context"
-	"github.com/pufferpanel/apufferi/logging"
+	"fmt"
 	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/strslice"
+	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/api/types/strslice"
+	"github.com/docker/docker/client"
+	"github.com/pufferpanel/apufferi/logging"
+	ppError "github.com/pufferpanel/pufferd/errors"
 	"io"
 	"io/ioutil"
-	"time"
-	"runtime"
 	"os"
-	"fmt"
+	"runtime"
 	"syscall"
+	"time"
 )
 
 type docker struct {
 	*BaseEnvironment
-	ContainerId string `json:"-"`
-	ImageName   string `json:"image"`
-	connection  types.HijackedResponse
-	cli			*client.Client
+	ContainerId      string `json:"-"`
+	ImageName        string `json:"image"`
+	connection       types.HijackedResponse
+	cli              *client.Client
 	downloadingImage bool
+	enforceNetwork   bool
 }
 
-func createDocker(containerId, imageName string) *docker {
+func createDocker(containerId, imageName string, enforceNetwork bool) *docker {
 	if imageName == "" {
 		imageName = "pufferpanel/generic"
 	}
-	d := &docker{BaseEnvironment: &BaseEnvironment{Type: "docker"}, ContainerId: containerId, ImageName: imageName}
+	d := &docker{BaseEnvironment: &BaseEnvironment{Type: "docker"}, ContainerId: containerId, ImageName: imageName, enforceNetwork: enforceNetwork}
 	d.BaseEnvironment.executeAsync = d.dockerExecuteAsync
 	d.BaseEnvironment.waitForMainProcess = d.WaitForMainProcess
 	return d
 }
 
-func (d *docker) dockerExecuteAsync(cmd string, args []string, env map[string]string, callback func(graceful bool)) (error) {
+func (d *docker) dockerExecuteAsync(cmd string, args []string, env map[string]string, callback func(graceful bool)) error {
 	running, err := d.IsRunning()
 	if err != nil {
 		return err
@@ -111,8 +112,7 @@ func (d *docker) dockerExecuteAsync(cmd string, args []string, env map[string]st
 		d.wait.Done()
 	}()
 
-	startOpts := types.ContainerStartOptions{
-	}
+	startOpts := types.ContainerStartOptions{}
 
 	err = client.ContainerStart(ctx, d.ContainerId, startOpts)
 	if err != nil {
@@ -232,7 +232,7 @@ func (e *docker) WaitForMainProcessFor(timeout int) (err error) {
 func (d *docker) getClient() (*client.Client, error) {
 	var err error = nil
 	if d.cli == nil {
-		d.cli, err = client.NewEnvClient()
+		d.cli, err = client.NewClientWithOpts(client.FromEnv)
 		ctx := context.Background()
 		d.cli.NegotiateAPIVersion(ctx)
 	}
@@ -282,8 +282,7 @@ func (d *docker) pullImage(client *client.Client, ctx context.Context, force boo
 		return nil
 	}
 
-	op := types.ImagePullOptions{
-	}
+	op := types.ImagePullOptions{}
 
 	logging.Debugf("Downloading image %v", d.ImageName)
 	d.DisplayToConsole("Downloading image for container, please wait\n")
@@ -320,7 +319,7 @@ func (d *docker) createContainer(client *client.Client, ctx context.Context, cmd
 
 	newEnv := os.Environ()
 	//newEnv["home"] = root
-	newEnv = append(newEnv, "HOME=" + root)
+	newEnv = append(newEnv, "HOME="+root)
 	for k, v := range env {
 		newEnv = append(newEnv, fmt.Sprintf("%s=%s", k, v))
 	}
@@ -334,8 +333,8 @@ func (d *docker) createContainer(client *client.Client, ctx context.Context, cmd
 		NetworkDisabled: false,
 		Cmd:             cmdSlice,
 		Image:           d.ImageName,
-		WorkingDir:		 root,
-		Env:			 newEnv,
+		WorkingDir:      root,
+		Env:             newEnv,
 	}
 
 	if runtime.GOOS == "linux" {
@@ -345,14 +344,12 @@ func (d *docker) createContainer(client *client.Client, ctx context.Context, cmd
 	hostConfig := &container.HostConfig{
 		AutoRemove:  true,
 		NetworkMode: "host",
-		Resources: container.Resources{
-		},
-		Binds: make([]string, 0),
+		Resources:   container.Resources{},
+		Binds:       make([]string, 0),
 	}
 	hostConfig.Binds = append(hostConfig.Binds, root+":"+root)
 
-	networkConfig := &network.NetworkingConfig{
-	}
+	networkConfig := &network.NetworkingConfig{}
 
 	_, err = client.ContainerCreate(ctx, config, hostConfig, networkConfig, d.ContainerId)
 	return err

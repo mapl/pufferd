@@ -12,6 +12,10 @@ import (
 	"os"
 )
 
+type ServerJson struct {
+	ProgramData ProgramData `json:"pufferd"`
+}
+
 type ProgramData struct {
 	Data            map[string]DataObject  `json:"data"`
 	Display         string                 `json:"display"`
@@ -20,17 +24,19 @@ type ProgramData struct {
 	Type            string                 `json:"type"`
 	Identifier      string                 `json:"id"`
 	RunData         RunObject              `json:"run"`
+	Template        string                 `json:"template"`
 
 	Environment  environments.Environment `json:"-"`
 	CrashCounter int                      `json:"-"`
 }
 
 type DataObject struct {
-	Description string      `json:"desc"`
-	Display     string      `json:"display"`
-	Internal    bool        `json:"internal"`
-	Required    bool        `json:"required"`
-	Value       interface{} `json:"value"`
+	Description  string      `json:"desc"`
+	Display      string      `json:"display"`
+	Internal     bool        `json:"internal"`
+	Required     bool        `json:"required"`
+	Value        interface{} `json:"value"`
+	UserEditable bool        `json:"userEdit"`
 }
 
 type RunObject struct {
@@ -42,7 +48,8 @@ type RunObject struct {
 	AutoRestartFromCrash    bool                     `json:"autorecover"`
 	AutoRestartFromGraceful bool                     `json:"autorestart"`
 	Pre                     []map[string]interface{} `json:"pre"`
-	StopCode                int                      `json:"stopcode"`
+	Post                    []map[string]interface{} `json:"post"`
+	StopCode                int                      `json:"stopCode,omitempty"`
 	EnvironmentVariables    map[string]string        `json:"environmentVars"`
 }
 
@@ -63,9 +70,13 @@ func (p ProgramData) DataToMap() map[string]interface{} {
 func CreateProgram() ProgramData {
 	return ProgramData{
 		RunData: RunObject{
-			Enabled:   true,
-			AutoStart: false,
-			Pre:       make([]map[string]interface{}, 0),
+			Enabled:                 true,
+			AutoStart:               false,
+			AutoRestartFromCrash:    false,
+			AutoRestartFromGraceful: false,
+			Pre:                  make([]map[string]interface{}, 0),
+			Post:                 make([]map[string]interface{}, 0),
+			EnvironmentVariables: make(map[string]string, 0),
 		},
 		Type:    "standard",
 		Data:    make(map[string]DataObject, 0),
@@ -90,10 +101,10 @@ func (p *ProgramData) Start() (err error) {
 		data[k] = v.Value
 	}
 
-	process := operations.GenerateProcess(p.RunData.Pre, p.Environment, p.DataToMap())
+	process := operations.GenerateProcess(p.RunData.Pre, p.Environment, p.DataToMap(), p.RunData.EnvironmentVariables)
 	err = process.Run()
 	if err != nil {
-		p.Environment.DisplayToConsole("Error running pre execute, check daemon logs")
+		p.Environment.DisplayToConsole("Error running pre execute, check daemon logs\n")
 		return
 	}
 
@@ -183,10 +194,35 @@ func (p *ProgramData) Install() (err error) {
 
 	os.MkdirAll(p.Environment.GetRootDirectory(), 0755)
 
-	process := operations.GenerateProcess(p.InstallData.Operations, p.GetEnvironment(), p.DataToMap())
+	var process operations.OperationProcess
+
+	if len(p.InstallData.Operations) == 0 && p.Template != "" {
+		logging.Debugf("Server %s has no defined install data, using template", p.Id())
+		templateData, err := ioutil.ReadFile(common.JoinPath(TemplateFolder, p.Template+".json"))
+		if err != nil {
+			logging.Error("Error reading template for "+p.Template, err)
+			p.Environment.DisplayToConsole("Error running installer, check daemon logs\n")
+			return err
+		}
+
+		templateJson := ServerJson{}
+		err = json.Unmarshal(templateData, &templateJson)
+		if err != nil {
+			logging.Error("Malformed json for program "+p.Template, err)
+			p.Environment.DisplayToConsole("Error running installer, check daemon logs\n")
+			return err
+		}
+
+		process = operations.GenerateProcess(templateJson.ProgramData.InstallData.Operations, p.GetEnvironment(), p.DataToMap(), p.RunData.EnvironmentVariables)
+
+	} else {
+		logging.Debugf("Server %s has defined install data", p.Id())
+		process = operations.GenerateProcess(p.InstallData.Operations, p.GetEnvironment(), p.DataToMap(), p.RunData.EnvironmentVariables)
+	}
+
 	err = process.Run()
 	if err != nil {
-		p.Environment.DisplayToConsole("Error running installer, check daemon logs")
+		p.Environment.DisplayToConsole("Error running installer, check daemon logs\n")
 	} else {
 		p.Environment.DisplayToConsole("Server installed\n")
 	}
@@ -242,8 +278,8 @@ func (p *ProgramData) IsAutoStart() (isAutoStart bool) {
 func (p *ProgramData) Save(file string) (err error) {
 	logging.Debugf("Saving server %s", p.Id())
 
-	endResult := make(map[string]interface{})
-	endResult["pufferd"] = p
+	endResult := ServerJson{}
+	endResult.ProgramData = *p
 
 	data, err := json.MarshalIndent(endResult, "", "  ")
 	if err != nil {
@@ -302,11 +338,31 @@ func (p *ProgramData) CopyFrom(s *ProgramData) {
 	p.EnvironmentData = s.EnvironmentData
 	p.InstallData = s.InstallData
 	p.Type = s.Type
+	p.Template = s.Template
 }
 
-func(p *ProgramData) afterExit(graceful bool) {
+func (p *ProgramData) afterExit(graceful bool) {
 	if graceful {
 		p.CrashCounter = 0
+	}
+
+	mapping := p.DataToMap()
+	mapping["success"] = graceful
+
+	processes := operations.GenerateProcess(p.RunData.Post, p.Environment, mapping, p.RunData.EnvironmentVariables)
+
+	p.Environment.DisplayToConsole("Running post-execution steps\n")
+	logging.Debugf("Running post execution steps: %s", p.Id())
+
+	err := processes.Run()
+	if err != nil {
+		logging.Error("Error running post processing")
+		p.Environment.DisplayToConsole("Error executing post steps\n")
+		return
+	}
+
+	if !p.RunData.AutoRestartFromCrash && !p.RunData.AutoRestartFromGraceful {
+		return
 	}
 
 	if graceful && p.RunData.AutoRestartFromGraceful {

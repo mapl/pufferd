@@ -17,13 +17,13 @@
 package environments
 
 import (
+	"fmt"
 	"github.com/gorilla/websocket"
 	"github.com/pufferpanel/apufferi/cache"
+	"github.com/pufferpanel/apufferi/config"
 	"github.com/pufferpanel/pufferd/utils"
-	"fmt"
 	"io"
 	"os"
-	"github.com/pufferpanel/apufferi/config"
 	"sync"
 )
 
@@ -66,17 +66,17 @@ type Environment interface {
 
 	DisplayToConsole(msg string, data ...interface{})
 
-	SendCode(code int) error 
+	SendCode(code int) error
 }
 
 type BaseEnvironment struct {
 	Environment
-	RootDirectory string                 `json:"-"`
-	ConsoleBuffer cache.Cache            `json:"-"`
-	WSManager     utils.WebSocketManager `json:"-"`
-	wait          sync.WaitGroup
-	Type          string                 `json:"type"`
-	executeAsync func(cmd string, args []string, env map[string]string, callback func(graceful bool)) (err error)
+	RootDirectory      string                 `json:"-"`
+	ConsoleBuffer      cache.Cache            `json:"-"`
+	WSManager          utils.WebSocketManager `json:"-"`
+	wait               sync.WaitGroup
+	Type               string `json:"type"`
+	executeAsync       func(cmd string, args []string, env map[string]string, callback func(graceful bool)) (err error)
 	waitForMainProcess func() (err error)
 }
 
@@ -93,7 +93,6 @@ func (e *BaseEnvironment) Execute(cmd string, args []string, env map[string]stri
 func (e *BaseEnvironment) WaitForMainProcess() (err error) {
 	return e.waitForMainProcess()
 }
-
 
 func (e *BaseEnvironment) ExecuteAsync(cmd string, args []string, env map[string]string, callback func(graceful bool)) (err error) {
 	return e.executeAsync(cmd, args, env, callback)
@@ -137,7 +136,7 @@ func (e *BaseEnvironment) Delete() (err error) {
 }
 
 func (e *BaseEnvironment) createWrapper() io.Writer {
-	if config.Get("forward") == "true" {
+	if config.GetBoolOrDefault("forward", false) {
 		return io.MultiWriter(os.Stdout, e.ConsoleBuffer, e.WSManager)
 	}
 	return io.MultiWriter(e.ConsoleBuffer, e.WSManager)

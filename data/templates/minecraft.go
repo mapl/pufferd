@@ -453,7 +453,7 @@ const Forge = `{
         "type": "boolean"
       },
       "version": {
-      	"value": "1.12.2-14.23.1.2555",
+      	"value": "1.12.2-14.23.4.2705",
       	"required": true,
       	"desc": "Version of Forge to install (may be located <a href='http://files.minecraftforge.net/#Downloads'>here</a>",
       	"display": "Version",
@@ -567,14 +567,14 @@ const Sponge = `{
         "type": "boolean"
       },
       "spongeversion": {
-      	"value": "1.12.2-2555-7.1.0-BETA-2844",
+      	"value": "1.12.2-7.1.0-BETA-3171",
       	"required": true,
       	"desc": "Version of Sponge to install (may be located <a href='https://www.spongepowered.org/downloads/spongeforge/stable/'>here</a>",
       	"display": "Sponge Version",
       	"internal": false
       },
       "forgeversion": {
-      	"value": "1.12.2-14.23.1.2555",
+      	"value": "1.12.2-14.23.4.2705",
       	"required": true,
       	"desc": "Version of Forge to install (use version specified by Sponge)",
       	"display": "Forge Version",
@@ -1033,7 +1033,7 @@ const ForgeDocker = `{
         "type": "boolean"
       },
       "version": {
-      	"value": "1.12.2-14.23.1.2555",
+      	"value": "1.12.2-14.23.4.2705",
       	"required": true,
       	"desc": "Version of Forge to install (may be located <a href='http://files.minecraftforge.net/#Downloads'>here</a>",
       	"display": "Version",
@@ -1148,14 +1148,14 @@ const SpongeDocker = `{
         "type": "boolean"
       },
       "spongeversion": {
-      	"value": "1.12.2-2555-7.1.0-BETA-2844",
+      	"value": "1.12.2-7.1.0-BETA-3171",
       	"required": true,
       	"desc": "Version of Sponge to install (may be located <a href='https://www.spongepowered.org/downloads/spongeforge/stable/'>here</a>",
       	"display": "Sponge Version",
       	"internal": false
       },
       "forgeversion": {
-      	"value": "1.12.2-14.23.1.2555",
+      	"value": "1.12.2-14.23.4.2705",
       	"required": true,
       	"desc": "Version of Forge to install (use version specified by Sponge)",
       	"display": "Forge Version",

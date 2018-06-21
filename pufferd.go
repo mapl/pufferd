@@ -18,19 +18,15 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"io/ioutil"
 	"os"
-	"path/filepath"
-
-	"fmt"
-
-	"net/http"
-	"strings"
 
 	"github.com/braintree/manners"
 	"github.com/gin-gonic/gin"
 	"github.com/pufferpanel/apufferi/config"
 	"github.com/pufferpanel/apufferi/logging"
+	"github.com/pufferpanel/pufferd/commands"
 	"github.com/pufferpanel/pufferd/data"
 	"github.com/pufferpanel/pufferd/data/templates"
 	"github.com/pufferpanel/pufferd/install"
@@ -39,8 +35,13 @@ import (
 	"github.com/pufferpanel/pufferd/routing"
 	"github.com/pufferpanel/pufferd/sftp"
 	"github.com/pufferpanel/pufferd/shutdown"
-	"github.com/pufferpanel/pufferd/uninstaller"
+	"net/http"
+	"os/signal"
+	"path/filepath"
 	"runtime"
+	"runtime/debug"
+	"strings"
+	"syscall"
 )
 
 var (
@@ -48,6 +49,9 @@ var (
 	MAJORVERSION = "nightly"
 	GITHASH      = "unknown"
 )
+
+var runService = true
+var configPath string
 
 func main() {
 	var loggingLevel string
@@ -58,10 +62,9 @@ func main() {
 	var license bool
 	var regenerate bool
 	var migrate bool
-	var uninstall bool
-	var configPath string
-	var pid int
+	var shutdownPid int
 	var runDaemon bool
+	var reloadPid int
 	flag.StringVar(&loggingLevel, "logging", "INFO", "Lowest logging level to display")
 	flag.StringVar(&authRoot, "auth", "", "Base URL to the authorization server")
 	flag.StringVar(&authToken, "token", "", "Authorization token")
@@ -70,20 +73,25 @@ func main() {
 	flag.BoolVar(&license, "license", false, "View license")
 	flag.BoolVar(&regenerate, "regenerate", false, "Regenerate pufferd templates")
 	flag.BoolVar(&migrate, "migrate", false, "Migrate Scales data to pufferd")
-	flag.BoolVar(&uninstall, "uninstall", false, "Uninstall pufferd")
 	flag.StringVar(&configPath, "config", "config.json", "Path to pufferd config.json")
-	flag.IntVar(&pid, "shutdown", 0, "PID to shut down")
+	flag.IntVar(&shutdownPid, "shutdown", 0, "PID to shut down")
+	flag.IntVar(&reloadPid, "reload", 0, "PID to shut down")
 	flag.BoolVar(&runDaemon, "run", false, "Runs the daemon")
 	flag.Parse()
 
 	versionString := fmt.Sprintf("pufferd %s (%s)", VERSION, GITHASH)
 
-	if pid != 0 {
+	if shutdownPid != 0 {
 		logging.Info("Shutting down")
-		shutdown.Command(pid)
+		commands.Shutdown(shutdownPid)
 	}
 
-	if _, err := os.Stat(configPath); os.IsNotExist(err) && !runInstaller {
+	if reloadPid != 0 {
+		logging.Info("Reloading")
+		commands.Reload(reloadPid)
+	}
+
+	if _, err := os.Stat(configPath); os.IsNotExist(err) && !runInstaller && !version && reloadPid == 0 && shutdownPid == 0 {
 		if _, err := os.Stat("/etc/pufferd/config.json"); err == nil {
 			logging.Info("No config passed, defaulting to /etc/pufferd/config.json")
 			configPath = "/etc/pufferd/config.json"
@@ -93,26 +101,7 @@ func main() {
 		}
 	}
 
-	if uninstall {
-		fmt.Println("This option will UNINSTALL pufferd, are you sure? Please enter \"yes\" to proceed [no]")
-		var response string
-		fmt.Scanln(&response)
-		if strings.ToLower(response) == "yes" || strings.ToLower(response) == "y" {
-			if os.Geteuid() != 0 {
-				logging.Error("To uninstall pufferd you need to have sudo or root privileges")
-			} else {
-				config.Load(configPath)
-				uninstaller.StartProcess()
-				logging.Info("pufferd is now uninstalled.")
-			}
-		} else {
-			logging.Info("Uninstall process aborted")
-			logging.Info("Exiting")
-		}
-		return
-	}
-
-	if version || !runDaemon {
+	if version {
 		os.Stdout.WriteString(versionString + "\r\n")
 	}
 
@@ -121,19 +110,7 @@ func main() {
 	}
 
 	if regenerate {
-		config.Load(configPath)
-		programs.Initialize()
-
-		if _, err := os.Stat(programs.TemplateFolder); os.IsNotExist(err) {
-			logging.Info("No template directory found, creating")
-			err = os.MkdirAll(programs.TemplateFolder, 0755)
-			if err != nil {
-				logging.Error("Error creating template folder", err)
-			}
-		}
-		// Overwrite existing templates
-		templates.CopyTemplates()
-		logging.Info("Templates regenerated")
+		commands.Regenerate(configPath)
 	}
 
 	if migrate {
@@ -141,7 +118,7 @@ func main() {
 		migration.MigrateFromScales()
 	}
 
-	if license || version || regenerate || migrate || pid != 0 {
+	if license || version || regenerate || migrate || shutdownPid != 0 || reloadPid != 0 {
 		return
 	}
 
@@ -152,7 +129,7 @@ func main() {
 	if runtime.GOOS == "linux" {
 		defaultLogFolder = "/var/log/pufferd"
 	}
-	var logPath = config.GetOrDefault("logPath", defaultLogFolder)
+	var logPath = config.GetStringOrDefault("logPath", defaultLogFolder)
 	logging.SetLogFolder(logPath)
 	logging.Init()
 	gin.SetMode(gin.ReleaseMode)
@@ -188,22 +165,39 @@ func main() {
 		os.MkdirAll(programs.ServerFolder, 0755)
 	}
 
+	//check if there's an update
+	go CheckForUpdate()
+
 	programs.LoadFromFolder()
 
 	programs.InitService()
 
 	for _, element := range programs.GetAll() {
-		if element.IsEnabled() && element.IsAutoStart() {
-			logging.Info("Queued server " + element.Id())
-			programs.StartViaService(element)
+		if element.IsEnabled() {
+			element.GetEnvironment().DisplayToConsole("Daemon has been started\n")
+			if element.IsAutoStart() {
+				logging.Info("Queued server " + element.Id())
+				element.GetEnvironment().DisplayToConsole("Server has been queued to start\n")
+				programs.StartViaService(element)
+			}
 		}
 	}
 
+	CreateHook()
+
+	for runService {
+		runServices()
+	}
+
+	shutdown.Shutdown()
+}
+
+func runServices() {
 	r := routing.ConfigureWeb()
 
 	useHttps := false
 
-	dataFolder := config.GetOrDefault("datafolder", "data")
+	dataFolder := config.GetStringOrDefault("datafolder", "data")
 	httpsPem := filepath.Join(dataFolder, "https.pem")
 	httpsKey := filepath.Join(dataFolder, "https.key")
 
@@ -217,31 +211,7 @@ func main() {
 
 	sftp.Run()
 
-	//check if there's an update
-	if config.GetOrDefault("update-check", "true") == "true" {
-		go func() {
-			url := "https://dl.pufferpanel.com/pufferd/" + MAJORVERSION + "/version.txt"
-			logging.Debug("Checking for updates using " + url)
-			resp, err := http.Get(url)
-			if err != nil {
-				return
-			}
-			defer resp.Body.Close()
-			onlineVersion, err := ioutil.ReadAll(resp.Body)
-			if err != nil {
-				return
-			}
-			if string(onlineVersion) != GITHASH {
-				logging.Infof("DL server reports a different hash than this version, an update may be available")
-				logging.Infof("Installed: %s", GITHASH)
-				logging.Infof("Online: %s", onlineVersion)
-			}
-		}()
-	}
-
-	web := config.GetOrDefault("web", config.GetOrDefault("webhost", "0.0.0.0")+":"+config.GetOrDefault("webport", "5656"))
-
-	shutdown.CreateHook()
+	web := config.GetStringOrDefault("web", config.GetStringOrDefault("webhost", "0.0.0.0")+":"+config.GetStringOrDefault("webport", "5656"))
 
 	logging.Infof("Starting web access on %s", web)
 	var err error
@@ -253,6 +223,53 @@ func main() {
 	if err != nil {
 		logging.Error("Error starting web service", err)
 	}
+}
 
-	shutdown.Shutdown()
+func CreateHook() {
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, syscall.Signal(15), syscall.Signal(1))
+	go func() {
+		defer func() {
+			if err := recover(); err != nil {
+				logging.Errorf("Error: %+v\n%s", err, debug.Stack())
+			}
+		}()
+
+		var sig os.Signal
+
+		for sig != syscall.Signal(15) {
+			sig = <-c
+			switch sig {
+			case syscall.Signal(1):
+				manners.Close()
+				sftp.Stop()
+				config.Load(configPath)
+			}
+		}
+
+		runService = false
+		shutdown.CompleteShutdown()
+	}()
+}
+
+func CheckForUpdate() {
+	if config.GetBoolOrDefault("update-check", true) {
+		url := "https://dl.pufferpanel.com/pufferd/" + MAJORVERSION + "/version.txt"
+		logging.Debug("Checking for updates using " + url)
+		resp, err := http.Get(url)
+		if err != nil {
+			return
+		}
+		defer resp.Body.Close()
+		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return
+		}
+		onlineVersion := strings.TrimSpace(string(body))
+		if string(onlineVersion) != GITHASH {
+			logging.Infof("DL server reports a different hash than this version, an update may be available")
+			logging.Infof("Installed: %s", GITHASH)
+			logging.Infof("Online: %s", onlineVersion)
+		}
+	}
 }

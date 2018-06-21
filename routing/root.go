@@ -31,7 +31,7 @@ func ConfigureWeb() *gin.Engine {
 	r := gin.New()
 	{
 		r.Use(gin.Recovery())
-		if config.GetOrDefault("log.api", "false") == "true" {
+		if config.GetBoolOrDefault("log.api", false) {
 			r.Use(handler.ApiLogging())
 		}
 		r.Use(handler.Recovery())

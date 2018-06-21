@@ -23,7 +23,7 @@ import (
 	"github.com/pufferpanel/pufferd/programs/operations/ops"
 )
 
-func GenerateProcess(directions []map[string]interface{}, environment environments.Environment, dataMapping map[string]interface{}) OperationProcess {
+func GenerateProcess(directions []map[string]interface{}, environment environments.Environment, dataMapping map[string]interface{}, env map[string]string) OperationProcess {
 	datamap := make(map[string]interface{})
 	for k, v := range dataMapping {
 		datamap[k] = v
@@ -34,7 +34,7 @@ func GenerateProcess(directions []map[string]interface{}, environment environmen
 		switch mapping["type"] {
 		case "command":
 			for _, element := range common.ToStringArray(mapping["commands"]) {
-				operationList = append(operationList, &ops.Command{Command: common.ReplaceTokens(element, datamap), Environment: environment})
+				operationList = append(operationList, &ops.Command{Command: common.ReplaceTokens(element, datamap), Environment: environment, Env: env})
 			}
 		case "download":
 			for _, element := range common.ToStringArray(mapping["files"]) {

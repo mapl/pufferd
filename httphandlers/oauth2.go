@@ -127,8 +127,8 @@ func OAuth2Handler(scope string, requireServer bool) gin.HandlerFunc {
 }
 
 func validateToken(accessToken string, gin *gin.Context) bool {
-	authUrl := config.Get("infoserver")
-	token := config.Get("authtoken")
+	authUrl := config.GetString("infoserver")
+	token := config.GetString("authtoken")
 	client := &http.Client{}
 	data := url.Values{}
 	data.Set("token", accessToken)
@@ -156,7 +156,8 @@ func validateToken(accessToken string, gin *gin.Context) bool {
 	}
 	var respArr map[string]interface{}
 	json.NewDecoder(response.Body).Decode(&respArr)
-	logging.Debugf("%+v", respArr)
+
+	logging.Develf("%+v", respArr)
 	if respArr["error"] != nil {
 		logging.Error("Error parsing response from auth server", err)
 		errMsg := make(map[string]string)

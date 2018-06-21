@@ -33,18 +33,25 @@ import (
 	"strings"
 
 	"github.com/pkg/errors"
-	"github.com/pkg/sftp"
+	"github.com/pufferpanel/sftp"
 	configuration "github.com/pufferpanel/apufferi/config"
 	"github.com/pufferpanel/apufferi/logging"
 	"github.com/pufferpanel/pufferd/programs"
 	"golang.org/x/crypto/ssh"
+	"path/filepath"
 )
+
+var sftpServer net.Listener
 
 func Run() {
 	e := runServer()
 	if e != nil {
 		logging.Error("Error starting SFTP", e)
 	}
+}
+
+func Stop() {
+	sftpServer.Close()
 }
 
 func runServer() error {
@@ -54,7 +61,7 @@ func runServer() error {
 		},
 	}
 
-	serverKeyFile := path.Join(configuration.GetOrDefault("datafolder", "data"), "server.key")
+	serverKeyFile := path.Join(configuration.GetStringOrDefault("datafolder", "data"), "server.key")
 
 	_, e := os.Stat(serverKeyFile)
 
@@ -96,9 +103,9 @@ func runServer() error {
 
 	config.AddHostKey(hkey)
 
-	bind := configuration.GetOrDefault("sftp", "0.0.0.0:5657")
+	bind := configuration.GetStringOrDefault("sftp", "0.0.0.0:5657")
 
-	listener, e := net.Listen("tcp", bind)
+	sftpServer, e = net.Listen("tcp", bind)
 	if e != nil {
 		return e
 	}
@@ -106,8 +113,10 @@ func runServer() error {
 
 	go func() {
 		for {
-			conn, _ := listener.Accept()
-			go HandleConn(conn, config)
+			conn, _ := sftpServer.Accept()
+			if conn != nil {
+				go HandleConn(conn, config)
+			}
 		}
 	}()
 
@@ -164,7 +173,7 @@ func handleConn(conn net.Conn, config *ssh.ServerConfig) error {
 			}
 		}(requests)
 
-		fs := CreateRequestPrefix(path.Join(programs.ServerFolder, sc.Permissions.Extensions["server_id"]))
+		fs := CreateRequestPrefix(filepath.Join(programs.ServerFolder, sc.Permissions.Extensions["server_id"]))
 
 		server := sftp.NewRequestServer(channel, fs)
 
@@ -184,14 +193,14 @@ func PrintDiscardRequests(in <-chan *ssh.Request) {
 }
 
 func validateSSH(username string, password string) (*ssh.Permissions, error) {
-	authUrl := configuration.Get("authserver")
+	authUrl := configuration.GetString("authserver")
 	client := &http.Client{}
 	data := url.Values{}
 	data.Set("grant_type", "password")
 	data.Set("username", username)
 	data.Set("password", password)
 	data.Set("scope", "sftp")
-	token := configuration.Get("authtoken")
+	token := configuration.GetString("authtoken")
 	request, _ := http.NewRequest("POST", authUrl, bytes.NewBufferString(data.Encode()))
 	request.Header.Add("Authorization", "Bearer "+token)
 	request.Header.Add("Content-Type", "application/x-www-form-urlencoded")
@@ -204,7 +213,9 @@ func validateSSH(username string, password string) (*ssh.Permissions, error) {
 
 	//we should only get a 200 or 400 back, if we get any others, we have a problem
 	if response.StatusCode != 200 {
-		logging.Error("Error talking to auth server", response.StatusCode)
+		msg, _ := ioutil.ReadAll(response.Body)
+
+		logging.Errorf("Error talking to auth server: [%d] [%s]", response.StatusCode, msg)
 		return nil, errors.New("Invalid response from authorization server")
 	}
 

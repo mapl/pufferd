@@ -18,9 +18,9 @@ package programs
 
 import (
 	"container/list"
+	"github.com/pufferpanel/pufferd/environments"
 	"sync"
 	"time"
-	"github.com/pufferpanel/pufferd/environments"
 )
 
 type Program interface {
@@ -85,23 +85,10 @@ func InitService() {
 	queue = list.New()
 	ticker = time.NewTicker(1 * time.Second)
 	running = true
-	go func() {
-		for range ticker.C {
-			lock.Lock()
-			next := queue.Front()
-			lock.Unlock()
-			if next == nil {
-				continue
-			}
-			program := next.Value.(Program)
-			if run, _ := program.IsRunning(); !run {
-				program.Start()
-			}
-		}
-	}()
+	go processQueue()
 }
 
-func StartViaService (p Program) {
+func StartViaService(p Program) {
 	lock.Lock()
 	defer func() {
 		lock.Unlock()
@@ -120,4 +107,22 @@ func ShutdownService() {
 
 	running = false
 	ticker.Stop()
+}
+
+func processQueue() {
+	for range ticker.C {
+		lock.Lock()
+		next := queue.Front()
+		if next != nil {
+			queue.Remove(next)
+		}
+		lock.Unlock()
+		if next == nil {
+			continue
+		}
+		program := next.Value.(Program)
+		if run, _ := program.IsRunning(); !run {
+			program.Start()
+		}
+	}
 }

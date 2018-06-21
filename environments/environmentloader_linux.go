@@ -22,7 +22,10 @@ func LoadEnvironment(environmentType, folder, id string, environmentSection map[
 		return t
 	case "docker":
 		logging.Debugf("Loading server as docker")
-		d := createDocker(id, common.GetStringOrDefault(environmentSection, "image", "pufferpanel/generic"))
+		d := createDocker(
+			id,
+			common.GetStringOrDefault(environmentSection, "image", "pufferpanel/generic"),
+			common.GetBooleanOrDefault(environmentSection, "enforceNetwork", false))
 		d.RootDirectory = rootDirectory
 		d.ConsoleBuffer = cache
 		d.WSManager = wsManager
